@@ -16,6 +16,12 @@ from unittest import mock, skipIf
 
 from django.conf import settings
 from django.core import management, signals
+from django.core.management import call_command
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import User
+from django.db.models import ProtectedError
+from django.test.utils import isolate_apps
+from django.db.utils import NotSupportedError
 from django.core.cache import (
     DEFAULT_CACHE_ALIAS,
     CacheHandler,
@@ -27,7 +33,8 @@ from django.core.cache import (
 from django.core.cache.backends.base import InvalidCacheBackendError
 from django.core.cache.backends.redis import RedisCacheClient
 from django.core.cache.utils import make_template_fragment_key
-from django.db import close_old_connections, connection, connections
+from django.db import close_old_connections, connection, connections, transaction
+from django.db import migrations, models
 from django.db.backends.utils import CursorWrapper
 from django.http import (
     HttpRequest,
@@ -2938,3 +2945,21 @@ class CacheHandlerTest(SimpleTestCase):
         # .all() initializes all caches.
         self.assertEqual(len(test_caches.all(initialized_only=True)), 2)
         self.assertEqual(test_caches.all(), test_caches.all(initialized_only=True))
+
+
+class MyModel(models.Model):
+    user = models.ForeignKey("auth.User", on_delete=models.PROTECT)
+
+
+class DeleteObjectTestCase(TestCase):
+    def test_delete_object_with_protected_foreign_key(self):
+        # Create a user and a related object
+        user = User.objects.create(username="testuser")
+        my_model = MyModel.objects.create(user=user)
+
+        # Try to delete the user (which has a protected foreign key reference)
+        with self.assertRaises(models.ProtectedError) as cm:
+            user.delete()
+
+        # Check if the error message indicates a protected foreign key constraint
+        self.assertIsInstance(cm.exception, models.ProtectedError)
